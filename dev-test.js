@@ -9,9 +9,9 @@
 
  const fooBlock = Block.mineBlock(Block.genesis(), 'foo');
  console.log(fooBlock.toString());
- */
+ 
 
-
+ // For checking Dinamaic Diffculty sync in the Blockchain
  const Blockchain = require('./blockchain');
 
  const bc = new Blockchain();
@@ -19,3 +19,9 @@
  for (let i=0; i<5; i++){
     console.log(bc.addBlock(`foo ${i}`).toString());
  }
+ */
+
+const Wallet = require('./wallet');
+const wallet = new Wallet();
+
+console.log(wallet.toString());

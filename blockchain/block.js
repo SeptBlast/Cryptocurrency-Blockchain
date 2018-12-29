@@ -1,5 +1,5 @@
-const SHA256 = require('crypto-js/sha256');
 const { DIFFICULTY, MINE_RATE } = require('../config');
+const ChianUtil = require('../chain-util');
 
 class Block {
     constructor(timestamp, lasthash, hash, data, nonce, difficulty) {
@@ -43,7 +43,7 @@ class Block {
     }
 
     static hash(timestamp, lasthash, data, nonce, difficulty) {
-        return SHA256(`${timestamp}${lasthash}${data}${nonce}${difficulty}`).toString();
+        return ChianUtil.hash(`${timestamp}${lasthash}${data}${nonce}${difficulty}`).toString();
     }
 
     static blockHash(block) {
