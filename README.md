@@ -916,3 +916,346 @@ static verifyTransaction(transaction) {
 }
 ```
 
+## Get Transactions
+By giving each of users their own wallet, users of the application will have the ability to conduct transactions with each other, thus putting the cryptocurrency into action. Start in the index file of the app directory, where holds the main code for the interactive application: - Go to app/index.js
+
+```
+...
+const Wallet = require('../wallet');
+const TransactionPool = require('../wallet/transaction-pool');
+
+...
+const wallet = new Wallet();
+const tp = new TransactionPool();
+
+...
+app.get('/transactions', (req, res) => {
+  res.json(tp.transactions);
+});
+```
+
+`$ npm run dev` - hit localhost:3001/transactions
+
+### Handle Messages in P2P Server
+Update the messageHandler in the peer to peer server to handle different types of messages. In p2p-server.js:
+
+```
+messageHandler(socket) {
+  socket.on('message', message => {
+    const data = JSON.parse(message);
+    switch(data.type) {
+      case MESSAGE_TYPES.chain:
+        this.blockchain.replaceChain(data.chain);
+        break;
+      case MESSAGE_TYPES.transaction:
+        this.transactionPool.updateOrAddTransaction(data.transaction);
+        break;
+    }
+  ...
+}
+```
+
+Now in app/index.js, use the broadcastTransaction function in the ‘/transact’ endpoint. That way, transactions are broadcasted to the network whenever new ones are made:
+
+```
+p2pServer.broadcastTransaction(transaction);
+```
+Now start up a couple instances to test the new endpoint: `$ npm run dev` Second command line tab: `$ HTTP_PORT=3002 P2P_PORT=5002 PEERS=ws://localhost:5001 npm run dev` Then post transactions. Hit localhost:3001/transact. Select POST for the type of request, and make sure the type of data is Raw, application/json. Then have a json body that consists of an arbitrary recipient, and a value around 50:
+```
+{
+  "recipient": "foo-address",
+  "amount": 50
+}
+```
+
+With those inputs loaded in, go ahead and click `Send` a couple times. Hit the transactions endpoint on both instances: - `localhost:3001/transactions` - `localhost:3002/transactions` Make a second POST transaction, this time with the second instance, `http://localhost:3002/transact`:
+
+```
+{
+  "recipient": "bar-address",
+  "amount": 40
+}
+```
+
+Hit the transactions endpoint on both instances: - `localhost:3001/transactions` - `localhost:3002/transactions`
+
+## POST Transactions
+Create the equivalent method that actually adds new transactions to the transaction pool, in `app/index.js`:
+
+```
+app.post('/transact', (req, res) => {
+  const { recipient, amount } = req.body;
+  const transaction = wallet.createTransaction(recipient, amount, tp);
+  res.redirect('/transactions');
+});
+```
+
+`$ npm run dev` Test a POST request in postman, with raw application/json set as the Body data. Use some json similar to this for the data:
+
+```
+{
+  "recipient": "foo-address",
+  "amount": 50
+}
+```
+Hit the endpoint a couple times
+
+## Public Key Endpoint
+Make a new get request, under the endpoint, public-key to expose the address of an instance:
+
+```
+app.get('/public-key', (req, res) => {
+  res.json({ publicKey: wallet.publicKey });
+});
+```
+
+### Test Transaction Pool
+Test the Transaction Pool by creating a file called transaction-pool.test.js alongside the transaction-pool.js file.
+
+```
+const TransactionPool = require('./transaction-pool');
+const Transaction = require('./transaction');
+const Wallet = require('./index');
+
+describe('TransactionPool', () => {
+  let tp, wallet, transaction;
+  beforeEach(() => {
+    tp = new TransactionPool();
+    wallet = new Wallet();
+    transaction = Transaction.newTransaction(wallet, 'r4nd-4dr355', 30);
+    tp.updateOrAddTransaction(transaction);
+  });
+
+  it('adds a transaction to the pool', () => {
+    expect(tp.transactions.find(t => t.id === transaction.id)).toEqual(transaction);
+  });
+
+  it('updates a transaction in the pool', () => {
+    const oldTransaction = JSON.stringify(transaction);
+    const newTransaction = transaction.update(wallet, 'foo-4ddr355', 40);
+    tp.updateOrAddTransaction(newTransaction);
+    expect(JSON.stringify(tp.transactions.find(t => t.id === newTransaction.id)))
+      .not.toEqual(oldTransaction);
+  });
+});
+```
+`$ npm run test`
+
+## Test Wallet Transactions
+Create wallet/index.test.js
+
+```
+const Wallet = require('./index');
+const TransactionPool = require('./transaction-pool');
+
+describe('Wallet', () => {
+  let wallet, tp;
+
+  beforeEach(() => {
+    wallet = new Wallet();
+    tp = new TransactionPool();
+  });
+
+  describe('creating a transaction', () => {
+    let transaction, sendAmount, recipient;
+    beforeEach(() => {
+      sendAmount = 50;
+      recipient = 'r4nd0m-4ddr3s';
+      transaction = wallet.createTransaction(recipient, sendAmount, tp);
+    });
+
+    describe('and doing the same transaction', () => {
+      beforeEach(() => {
+        wallet.createTransaction(recipient, sendAmount, tp);
+      });
+
+      it('doubles the `sendAmount` subtracted from the wallet balance', () => {
+        expect(transaction.outputs.find(output => output.address === wallet.publicKey).amount)
+        .toEqual(wallet.balance - sendAmount*2);
+      });
+
+      it('clones the `sendAmount` output for the recipient', () => {
+        expect(transaction.outputs.filter(output => output.address === recipient)
+          .map(output => output.amount)).toEqual([sendAmount, sendAmount]);
+      });
+    });
+  });
+});
+```
+
+`$ npm run test`
+
+## Add to Transaction Pool
+A transaction pool will collect all transactions submitted by individuals in the cryptocurrency network. Then, miners will do the work of taking transactions from the pool and including them in the blockchain. Create the transaction pool in the wallet directory with a file called `transaction-pool.js`:
+
+```
+class TransactionPool {
+  constructor() {
+    this.transactions = [];
+  }
+
+  updateOrAddTransaction(transaction) {
+    let transactionWithId = this.transactions.find(t => t.id === transaction.id);
+    if (transactionWithId) {
+      this.transactions[this.transactions.indexOf(transactionWithId)] = transaction;
+    } else {
+      this.transactions.push(transaction);
+    }
+  }
+}
+
+module.exports = TransactionPool;
+```
+
+The `updateOrAddTransaction` method by default will add an incoming transaction to the transactions array. However, there is the possibility that a transaction could come in that already exists in the array. Why? Recall that there is the ability to update transactions to have additional outputs. This means that a transaction could exist in the pool. However, if it gets updated, and is resubmitted to the pool, that transaction shouldn’t appear twice.
+
+## Transaction Pool to P2P Server
+Create the equivalent method that actually adds new transactions to the transaction pool, in app/index.js:
+
+```
+app.post('/transact', (req, res) => {
+  const { recipient, amount } = req.body;
+  const transaction = wallet.createTransaction(recipient, amount, tp);
+  res.redirect('/transactions');
+});
+```
+`$ npm run dev` Test a POST request in postman, with raw application/json set as the Body data. Use some json similar to this for the data:
+
+```
+{
+  "recipient": "foo-address",
+  "amount": 50
+}
+```
+Hit the endpoint a couple times
+
+## Transactions with Wallet
+Create transactions with the Wallet class. Define a new method within the Wallet class called createTransaction with three parameters, a recipient, the amount for the transaction, and a transactionPool object. The function will assume an `existingTransaction` function exists for the transactionPool, to help replace existing transactions in the pool: In `wallet/index.js`:
+
+```
+createTransaction(recipient, amount, transactionPool) {
+  if (amount > this.balance) {
+    console.log(`Amount: ${amount}, exceeds current balance: ${this.balance}`);
+    return;
+  }
+
+  let transaction = transactionPool.existingTransaction(this.publicKey);
+  if (transaction) {
+    transaction.update(this, recipient, amount);
+  } else {
+    transaction = Transaction.newTransaction(this, recipient, amount);
+    transactionPool.updateOrAddTransaction(transaction);
+  }
+
+  return transaction;
+}
+```
+
+Make sure to import the Transaction class in `wallet/index.js`
+
+```
+const Transaction = require('./transaction');
+```
+Add the existingTransaction function to transaction-pool.js:
+
+```
+existingTransaction(address) {
+   return this.transactions.find(transaction => transaction.input.address === address);
+ }
+ ```
+
+## Create the Miner Class
+Create a Miner class to tie all the concepts together. Create `app/miner.js`:
+
+```
+class Miner {
+  constructor(blockchain, transactionPool, wallet, p2pServer) {
+    this.blockchain = blockchain;
+    this.transactionPool = transactionPool;
+    this.wallet = wallet;
+    this.p2pServer = p2pServer;
+  }
+
+  mine() {
+    const validTransactions = this.transactionPool.validTransactions();
+    // include a reward transaction for the miner
+    // create a block consisting of the valid transactions
+    // synchronize chains in the peer-to-peer server
+    // clear the transaction pool
+    // broadcast to every miner to clear their transaction pools
+  }
+}
+
+module.exports = Miner;
+```
+
+## Grab Valid Transactions
+The first step to writing the mine function that we have in the Miner class is to add a validTransactions function for the TransactionPool. With this validTransactions function, return any transaction within the array of transactions that meets the following conditions. First, its total output amount matches the original balance specified in the input amount. Second, we’ll also verify the signature of every transaction to make sure that the data has not been corrupted after it was sent by the original sender. Add a function called validTransactions to `transaction-pool.js`:
+
+```
+validTransactions() {
+  return this.transactions.filter(transaction => {
+    const outputTotal = transaction.outputs.reduce((total, output) => {
+      return total + output.amount;
+    }, 0);
+
+    if (transaction.input.amount !== outputTotal) {
+      console.log(`Invalid transaction from ${transaction.input.address}.`);
+      return;
+    }
+
+    if (!Transaction.verifyTransaction(transaction)) {
+      console.log(`Invalid signature from ${transaction.input.address}.`)
+      return;
+    };
+
+    return transaction;
+  });
+}
+```
+
+Note that there is a dependency though on the Transaction class. So import the Transaction class at the top of the file:
+
+`jsconst Transaction = require('../wallet/transaction');`
+
+## Test Valid Transactions
+Test the validTransactions function with transaction-pool.test.js. There is actually a feature that can shorten down on the number of lines. Recall that there is a function within the wallet class create a transaction based on a given address, amount, and transaction pool. The createTransaction also does the job of adding the created transaction to the pool. This is what is already done manually by creating the transaction and adding it to the pool. So we can reduce this with one call to wallet.createTransaction, and the same random address, amount, and tp transaction pool instance:
+
+```
+// remove → transaction = Transaction.newTransaction(wallet, 'r4nd-4dr355', 30);
+// remove → tp.updateOrAddTransaction(transaction);
+transaction = wallet.createTransaction('r4nd-4dr355', 30, bc, tp);
+```
+
+To begin testing the validTransactions functionality, create a situation where there is a mix of valid and corrupt transactions. Capture the scenario with a new describe block:
+
+```
+describe('mixing valid and corrupt transactions', () => {
+  let validTransactions;
+  beforeEach(() => {
+    validTransactions = [...tp.transactions];
+    for (let i=0; i<6; i++) {
+      wallet = new Wallet();
+      transaction = wallet.createTransaction('r4nd-4dr355', 30, bc, tp);
+      if (i%2==0) {
+        transaction.input.amount = 9999;
+      } else {
+        validTransactions.push(transaction);
+      }
+    }
+  });
+
+  it('shows a difference between valid and corrupt transactions', () => {
+    expect(JSON.stringify(tp.transactions)).not.toEqual(JSON.stringify(validTransactions));
+  });
+
+  it('grabs valid transactions', () => {
+    expect(tp.validTransactions()).toEqual(validTransactions);
+  });
+});
+```
+`$ npm run test`
+
+Hope this structure will help you in moving forward with Blockchain.
+
+Copyright © 2018 Devesh Kumar - Inc
