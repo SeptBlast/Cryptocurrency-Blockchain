@@ -2,7 +2,7 @@
 
 ## Create the Block Class
 
-Create the block class with a file called block.js. Each black has a hash, lastHash, and timestamp attribute. Create block.js In block.js:
+Create the block class with a file called block.js. Each block has a hash, lastHash, and timestamp attribute. Create block.js In block.js:
 ```
 class Block {
 constructor(timestamp, lastHash, hash, data) {
