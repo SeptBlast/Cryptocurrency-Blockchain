@@ -1,4 +1,4 @@
-# Step By Step Explanation of the Structure of Blockchain
+# Step By Step Explanation of the Structure of Blockchain using JavaScript
 
 ## Create the Block Class
 
